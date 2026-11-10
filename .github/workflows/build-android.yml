@@ -1,4 +1,3 @@
-
 name: Build HGhub v1.2.1 Android ARM64
 
 on:
@@ -6,6 +5,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  CI: 'true'
 
 jobs:
   build-android:
@@ -53,36 +55,46 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Override v3's obsolete default: tools platform-tools.
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
 
       - name: Install Android NDK
         run: |
-          sdkmanager --install "ndk;27.2.12479018"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          sdkmanager --install "ndk;28.2.13676358"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
-      - name: Initialize Android project if missing
-        run: |
-          if [ ! -d src-tauri/gen/android ]; then
-            pnpm tauri android init
-          fi
+      - name: Initialize Android project
+        run: pnpm tauri android init --ci
 
-      - name: Build signed debug ARM64 APK
+      - name: Build debug ARM64 APK
+        run: pnpm tauri android build --debug --apk --target aarch64
+
+      - name: Verify APK architecture and signature
         run: |
-          pnpm tauri android build \
-            --debug \
-            --apk \
-            --target aarch64
+          set -euo pipefail
+          mapfile -d '' apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-debug.apk' -print0)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::No debug APK was generated"
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
+            cat "$RUNNER_TEMP/apk-badging.txt"
+            grep -Fx "native-code: 'arm64-v8a'" "$RUNNER_TEMP/apk-badging.txt"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: HGhub-v1.2.1-Android-ARM64
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*-debug.apk
           if-no-files-found: error
           retention-days: 30
