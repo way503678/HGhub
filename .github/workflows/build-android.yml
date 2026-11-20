@@ -2,6 +2,8 @@ name: Build HGhub v1.2.1 Android ARM64
 
 on:
   workflow_dispatch:
+  push:
+    branches: ['codex/rebuild-v1.2.1-android-73b95f1']
 
 permissions:
   contents: read
