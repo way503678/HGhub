@@ -1,406 +1,90 @@
-import React, { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import Hls from "hls.js";
-import { isLocalMedia, platform, playlist } from "../api";
-import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
-import { usePlaybackActivity } from "../usePlaybackActivity";
+import workerPath from 'hls.js/dist/hls.worker.js?url';
+import { hlsPlaybackPath } from '../plugins/mediaCapabilities';
+import { playbackTiming } from '../plugins/playbackTiming';
+import { pluginCommand, type PreparedMedia } from "../plugins/client";
 
-export type VideoHandle = {
+export interface VideoHandle {
   el: () => HTMLVideoElement | null;
-  play: () => void;
-  pause: () => void;
-  toggle: () => void;
-  seek: (t: number, sourceOrAutoResume?: string | boolean) => void;
-  trace: (event: string, data?: Record<string, unknown>) => void;
-  rate: (r: number) => void;
-  mute: (m: boolean) => void;
-  volume: (v: number) => void;
-  reload: () => void;
-};
+  play: () => void; pause: () => void; toggle: () => void;
+  seek: (time: number, source?: string) => void;
+  rate: (rate: number) => void; mute: (muted: boolean) => void; volume: (volume: number) => void;
+}
+interface Props {
+  media: PreparedMedia; position: number; active: boolean; autoPlay?: boolean;
+  poster?: string; muted: boolean; volume: number; rate: number; fit: "contain" | "cover";
+  scale: number; panX: number; panY: number; isGesturing: boolean;
+  onClick: () => void; onTime: (t: number) => void; onDuration: (d: number) => void;
+  onSize: (w: number,h: number) => void; onBuffered: (fraction: number) => void;
+  onBuffer?: (seconds: number) => void;
+  onPlaying: () => void; onPause: () => void; onWaiting: () => void;
+  onEnded?: () => void; onError: () => void;
+}
 
-type Props = {
-  src: string;
-  poster?: string;
-  autoPlay?: boolean;
-  active?: boolean;
-  diagnosticContext?: Record<string, unknown>;
-  muted?: boolean;
-  loop?: boolean;
-  fit?: "contain" | "cover";
-  /** 缩放倍率与平移偏移（用于移动端竖屏下双指缩放横屏视频） */
-  scale?: number;
-  panX?: number;
-  panY?: number;
-  isGesturing?: boolean;
-  /** 换源后重新套用，避免切集时音量/倍速被浏览器重置 */
-  volume?: number;
-  rate?: number;
-  onTime?: (t: number) => void;
-  onDuration?: (d: number) => void;
-  onSize?: (w: number, h: number) => void;
-  onPlaying?: () => void;
-  onPause?: () => void;
-  onWaiting?: () => void;
-  onEnded?: () => void;
-  onError?: (msg: string) => void;
-  onClick?: () => void;
-  className?: string;
-};
-
-/** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
-const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, active = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain",
-    scale = 1, panX = 0, panY = 0, isGesturing = false,
-    volume = 1, rate = 1,
-    onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
-  ref,
-) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const recoverCountRef = useRef(0);
-  const recoverTimerRef = useRef<number | null>(null);
-  const lastSizeRef = useRef({ w: 0, h: 0 });
-  const [ready, setReady] = useState(false);
-  const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
-  const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
-
-  const reportSizeAndDuration = (v: HTMLVideoElement) => {
-    if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
-      onDuration?.(v.duration);
-    }
-    const w = v.videoWidth || 0;
-    const h = v.videoHeight || 0;
-    if (w > 0 && h > 0 && (w !== lastSizeRef.current.w || h !== lastSizeRef.current.h)) {
-      lastSizeRef.current = { w, h };
-      onSize?.(w, h);
-    }
+/** Same surface/handle as the original player, loading only host-prepared media URLs. */
+export default forwardRef<VideoHandle, Props>(function VideoSurface(props, forwarded) {
+  const ref=useRef<HTMLVideoElement>(null), latest=useRef(props), hls=useRef<Hls|null>(null);
+  const playAttempt=useRef(0), wantsPlay=useRef(props.autoPlay!==false);
+  latest.current=props;
+  const play=()=>{
+    const v=ref.current;
+    if(!v || !latest.current.active || document.hidden)return;
+    wantsPlay.current=true;
+    const attempt=++playAttempt.current, sessionId=latest.current.media.sessionId;
+    if(v.paused || v.readyState<3)latest.current.onWaiting();
+    void v.play().catch((error:unknown)=>{
+      if(attempt!==playAttempt.current || sessionId!==latest.current.media.sessionId || !latest.current.active || document.hidden)return;
+      const name=(error as {name?:string})?.name;
+      if(name==='AbortError')return; // Source changes and pause interrupt pending play promises.
+      if(name==='NotAllowedError'){wantsPlay.current=false;latest.current.onPause();}
+      else latest.current.onError();
+    });
   };
-
-  const safeSeek = (t: number, sourceOrAutoResume: string | boolean = "handle") => {
-    const v = videoRef.current;
-    if (!v || !Number.isFinite(t)) return;
-    const dur = v.duration && Number.isFinite(v.duration) ? v.duration : 0;
-    const target = dur > 0 ? Math.max(0, Math.min(dur - 0.15, t)) : Math.max(0, t);
-    const source = typeof sourceOrAutoResume === "string" ? sourceOrAutoResume : "handle";
-    const autoResume = typeof sourceOrAutoResume === "boolean" ? sourceOrAutoResume : !v.paused;
-
-    requestSeek(target, source);
-    onWaiting?.();
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.startLoad(target);
-      } catch { /* ignore */ }
-    }
-
-    try {
-      v.currentTime = target;
-      trace("seek.assigned", { target, source });
-    } catch (e) {
-      trace("seek.rejected", { error_name: (e as Error).name });
-    }
-
-    if (autoResume && activity.isActive()) {
-      const resumeOnce = () => {
-        v.removeEventListener("seeked", resumeOnce);
-        v.removeEventListener("canplay", resumeOnce);
-        if (activity.isActive()) v.play().catch(() => {});
-      };
-      v.addEventListener("seeked", resumeOnce, { once: true });
-      v.addEventListener("canplay", resumeOnce, { once: true });
-      // 兜底：若 350ms 内已经就绪则直接播
-      window.setTimeout(() => {
-        if (v.readyState >= 2 && v.paused && activity.isActive()) {
-          v.removeEventListener("seeked", resumeOnce);
-          v.removeEventListener("canplay", resumeOnce);
-          v.play().catch(() => {});
-        }
-      }, 350);
-    }
-  };
-
-  useImperativeHandle(ref, () => ({
-    el: () => videoRef.current,
-    play: () => activity.play("handle"),
-    pause: () => activity.pause(),
-    toggle: () => {
-      const v = videoRef.current;
-      if (!v) return;
-      trace("toggle.request");
-      if (v.paused) activity.play("toggle"); else activity.pause("toggle");
-    },
-    seek: (t: number, sourceOrAutoResume: string | boolean = "handle") => safeSeek(t, sourceOrAutoResume),
-    trace,
-    rate: (r: number) => { const v = videoRef.current; if (v) v.playbackRate = r; },
-    mute: (m: boolean) => { const v = videoRef.current; if (v) v.muted = m; },
-    volume: (vol: number) => { const v = videoRef.current; if (v) v.volume = vol; },
-    reload: () => {
-      const v = videoRef.current;
-      if (!v) return;
-      recoverCountRef.current = 0;
-      const cur = v.currentTime || 0;
-      if (hlsRef.current) {
-        try {
-          hlsRef.current.startLoad(cur);
-          activity.play("reload");
-          return;
-        } catch { /* ignore */ }
-      }
-      v.load();
-      if (cur > 0) {
-        try { v.currentTime = cur; } catch { /* ignore */ }
-      }
-      activity.play("reload");
-    },
-  }));
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src) return;
-    setReady(false);
-    recoverCountRef.current = 0;
-    lastSizeRef.current = { w: 0, h: 0 };
-    if (recoverTimerRef.current) {
-      window.clearTimeout(recoverTimerRef.current);
-      recoverTimerRef.current = null;
-    }
-    if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-
-    const proxied = isLocalMedia(src);
-    const url = proxied ? src : playlist(src);
-    const useHls = !url.includes("/seg?u=");
-    const isIos = platform === "ios";
-    trace("source.load", { engine: useHls && Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src) });
-
-    /* 换源时先把音量/倍速套回去：hls 重新 attach 后浏览器会把它们重置成默认值 */
-    const applySettings = () => {
-      const v = videoRef.current;
-      if (!v) return;
-      v.volume = volume;
-      v.muted = muted;
-      v.playbackRate = rate;
-    };
-    applySettings();
-
-    if (useHls && Hls.isSupported()) {
-      const hls = new Hls({
-        // 禁用从插播/内容引导 JSON 派生直连 URL 的可选功能。
-        interstitialsController: undefined,
-        contentSteeringController: undefined,
-        enableInterstitialPlayback: false,
-        // iOS WKWebView 下 WebWorker 跨自定义协议 hg:// 高频中断易死锁，关闭 Worker 走主线程加载更稳
-        enableWorker: !isIos,
-        // Prefer standard MSE on macOS; hls.js handles MMS-only fallback and seek recovery.
-        preferManagedMediaSource: false,
-        autoStartLoad: false,
-        lowLatencyMode: false,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        backBufferLength: 30,
-        maxBufferHole: 0.5,
-        highBufferWatchdogPeriod: 2,
-        nudgeOffset: 0.25,
-        nudgeMaxRetry: 6,
-        manifestLoadingTimeOut: 20000,
-        manifestLoadingMaxRetry: 4,
-        levelLoadingTimeOut: 20000,
-        levelLoadingMaxRetry: 4,
-        fragLoadingTimeOut: 25000,
-        fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 400,
-        startFragPrefetch: true,
-      });
-      hlsRef.current = hls;
-      observeHls(hls, trace);
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (activity.isActive()) hls.startLoad();
-        if (autoPlay) activity.play("manifest_autoplay", true);
-      });
-      hls.on(Hls.Events.FRAG_BUFFERED, () => {
-        recoverCountRef.current = 0;
-        setReady(true);
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        // 非致命卡顿错误（常见于拖动进度条后缓冲空洞）：主动触发加载与微调跳帧
-        if (!data.fatal) {
-          if (
-            activity.isActive() && (
-              data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-              data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
-              data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT
-            )
-          ) {
-            try {
-              hls.startLoad(video.currentTime || -1);
-            } catch { /* ignore */ }
-          }
-          return;
-        }
-
-        if (!activity.isActive()) return;
-
-        // 致命错误：优先自动重连/恢复解码器，最多静默恢复 4 次，避免拖动进度条直接弹报错层
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          if (recoverCountRef.current < 4) {
-            recoverCountRef.current += 1;
-            const delay = 250 * recoverCountRef.current;
-            if (recoverTimerRef.current) window.clearTimeout(recoverTimerRef.current);
-            recoverTimerRef.current = window.setTimeout(() => {
-              if (!hlsRef.current || !activity.isActive()) return;
-              try {
-                hlsRef.current.startLoad(video.currentTime || -1);
-                if (!video.paused) video.play().catch(() => {});
-              } catch { /* ignore */ }
-            }, delay);
-            return;
-          }
-          onError?.(`${data.type}/${data.details}`);
-          hls.startLoad();
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          if (recoverCountRef.current < 4) {
-            recoverCountRef.current += 1;
-            try {
-              if (recoverCountRef.current === 2) hls.swapAudioCodec();
-              hls.recoverMediaError();
-              video.play().catch(() => {});
-            } catch { /* ignore */ }
-            return;
-          }
-          onError?.(`${data.type}/${data.details}`);
-          hls.recoverMediaError();
-        } else {
-          onError?.(`${data.type}/${data.details}`);
-          hls.destroy();
-          hlsRef.current = null;
-        }
-      });
-    } else {
-      video.src = url;
-      if (autoPlay) activity.play("native_autoplay", true);
-    }
-
-    return () => {
-      trace("source.cleanup");
-      if (recoverTimerRef.current) {
-        window.clearTimeout(recoverTimerRef.current);
-        recoverTimerRef.current = null;
-      }
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
-
-  useEffect(() => { if (videoRef.current) videoRef.current.muted = muted; }, [muted]);
-  useEffect(() => { if (videoRef.current) videoRef.current.volume = volume; }, [volume]);
-  useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = rate; }, [rate]);
-
-  const reapply = (v: HTMLVideoElement) => {
-    v.volume = volume;
-    v.muted = muted;
-    v.playbackRate = rate;
-  };
-
-  const nearEndFiredRef = useRef(false);
-  useEffect(() => {
-    nearEndFiredRef.current = false;
-  }, [src]);
-
-  // Native Resize Event listener for HTMLVideoElement (React doesn't always bind onResize on <video>)
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return undefined;
-    const onVideoResize = () => reportSizeAndDuration(v);
-    v.addEventListener("resize", onVideoResize);
-    return () => v.removeEventListener("resize", onVideoResize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
-
-  const hasTransform = scale !== 1 || panX !== 0 || panY !== 0;
-
-  return (
-    <div className={`relative w-full h-full bg-black overflow-hidden ${className}`}>
-      {!ready && poster && (
-        <img
-          src={poster}
-          alt=""
-          className={`absolute inset-0 w-full h-full pointer-events-none ${fit === "cover" ? "object-cover" : "object-contain"}`}
-        />
-      )}
-      <video
-        ref={videoRef}
-        playsInline
-        webkit-playsinline="true"
-        preload="auto"
-        muted={muted}
-        loop={loop}
-        onClick={onClick}
-        className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"}`}
-        style={{
-          opacity: ready ? 1 : 0,
-          transform: hasTransform ? `translate3d(${panX}px, ${panY}px, 0) scale(${scale})` : "translateZ(0)",
-          transformOrigin: "center center",
-          transition: isGesturing ? "opacity .25s" : "opacity .25s, transform .2s cubic-bezier(.2,0,0,1)",
-        }}
-        onLoadedData={(e) => {
-          const v = e.target as HTMLVideoElement;
-          setReady(true);
-          reapply(v);
-          reportSizeAndDuration(v);
-        }}
-        onCanPlay={(e) => {
-          const v = e.target as HTMLVideoElement;
-          setReady(true);
-          reportSizeAndDuration(v);
-        }}
-        onTimeUpdate={(e) => {
-          const v = e.target as HTMLVideoElement;
-          onTime?.(v.currentTime);
-          if (lastSizeRef.current.w === 0 && v.videoWidth > 0) {
-            reportSizeAndDuration(v);
-          }
-          // 借鉴 stclock1988/hghub-ios：部分 HLS 流容器标称时长比最后一个分片略长 0.5~1.2s，
-          // 接近片尾时提前复位准备，若卡在片尾则自动触发连播
-          if (!loop && !nearEndFiredRef.current && activity.isActive() && v.duration > 5 && v.currentTime >= v.duration - 0.35) {
-            nearEndFiredRef.current = true;
-            onEnded?.();
-          }
-        }}
-        onLoadedMetadata={(e) => {
-          const v = e.target as HTMLVideoElement;
-          reapply(v);
-          reportSizeAndDuration(v);
-        }}
-        onPlay={() => { if (activity.isActive()) onPlaying?.(); }}
-        onPause={() => onPause?.()}
-        onWaiting={(e) => {
-          const v = e.target as HTMLVideoElement;
-          if (!loop && !nearEndFiredRef.current && activity.isActive() && v.duration > 5 && v.currentTime >= v.duration - 1.5) {
-            nearEndFiredRef.current = true;
-            onEnded?.();
-            return;
-          }
-          onWaiting?.();
-        }}
-        onPlaying={(e) => {
-          setReady(true);
-          recoverCountRef.current = 0;
-          reportSizeAndDuration(e.target as HTMLVideoElement);
-          if (activity.isActive()) onPlaying?.();
-        }}
-        onSeeking={() => onWaiting?.()}
-        onSeeked={() => {
-          const v = videoRef.current;
-          if (v && !v.paused && activity.isActive()) onPlaying?.();
-        }}
-        onEnded={() => {
-          if (!nearEndFiredRef.current && activity.isActive()) {
-            nearEndFiredRef.current = true;
-            onEnded?.();
-          }
-        }}
-      />
-    </div>
-  );
+  const pause=()=>{wantsPlay.current=false;playAttempt.current++;const v=ref.current;if(!v)return;const alreadyPaused=v.paused;v.pause();if(alreadyPaused)latest.current.onPause();};
+  useImperativeHandle(forwarded,()=>({
+    el:()=>ref.current, play, pause,
+    toggle:()=>{const v=ref.current;if(v?.paused)play();else pause();},
+    seek:(t)=>{const v=ref.current;if(!v || !Number.isFinite(t) || !Number.isFinite(v.duration))return;const target=Math.max(0,Math.min(v.duration-.15,t));hls.current?.startLoad(target);v.currentTime=target;latest.current.onTime(target);},
+    rate:r=>{if(ref.current)ref.current.playbackRate=r;},mute:m=>{if(ref.current)ref.current.muted=m;},volume:n=>{if(ref.current)ref.current.volume=n;},
+  }),[]);
+  useEffect(()=>{
+    const v=ref.current!;let disposed=false,failed=false,resume=false;
+    playAttempt.current++;wantsPlay.current=latest.current.autoPlay!==false;
+    const started=performance.now(); let firstFrame: number | undefined;
+    const p=latest.current;
+    const activity=(playing:boolean)=>void pluginCommand("media.activity",{sessionId:p.media.sessionId,playing}).then(()=>{if(!playing)window.dispatchEvent(new Event("hpp.playback.idle"));}).catch(()=>{});
+    const fail=()=>{if(!disposed&&!failed){failed=true;latest.current.onError();}};
+    const metadata=()=>{if(p.position>0&&Number.isFinite(v.duration))v.currentTime=Math.min(p.position,Math.max(0,v.duration-.15));if(latest.current.active&&wantsPlay.current)play();};
+    const playing=()=>{if(!disposed){activity(true);latest.current.onPlaying();}};
+    const paused=()=>{if(!disposed&&v.paused){activity(false);latest.current.onTime(v.currentTime);if(!v.ended){if(wantsPlay.current&&latest.current.active&&v.readyState<3)latest.current.onWaiting();else latest.current.onPause();}}};
+    const visibility=()=>{if(document.hidden){resume=!v.paused;v.pause();hls.current?.stopLoad();}else if(resume){resume=false;if(latest.current.active){hls.current?.startLoad(v.currentTime);play();}}};
+    v.muted=p.muted;v.volume=p.volume;v.playbackRate=p.rate;
+    v.addEventListener("loadedmetadata",metadata);v.addEventListener("error",fail);v.addEventListener("playing",playing);v.addEventListener("pause",paused);document.addEventListener("visibilitychange",visibility);
+    if(p.media.format==="hls"&&hlsPlaybackPath(v)==="mse"){
+      const engine=new Hls({enableWorker:true,workerPath,autoStartLoad:p.active&&!document.hidden,startPosition:Math.max(0,p.position),backBufferLength:30,interstitialsController:undefined,contentSteeringController:undefined,enableInterstitialPlayback:false});
+      hls.current=engine;engine.loadSource(p.media.url);engine.attachMedia(v);
+      engine.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal)fail();});
+    }else v.src=p.media.url;
+    playbackTiming(p.media.sessionId,'media-load');
+    if(v.requestVideoFrameCallback)firstFrame=v.requestVideoFrameCallback(()=>{if(!disposed){playbackTiming(p.media.sessionId,'first-frame',started);if(p.media.requestedAt!==undefined)playbackTiming(p.media.sessionId,'intent-to-first-frame',p.media.requestedAt);}});
+    const expiry=p.media.playback.expiresAt;
+    const timer=expiry?window.setTimeout(fail,Math.max(1000,Math.min(2_147_483_647,expiry-Date.now()-5000))):undefined;
+    return()=>{disposed=true;playAttempt.current++;if(firstFrame!==undefined)v.cancelVideoFrameCallback(firstFrame);clearTimeout(timer);activity(false);document.removeEventListener("visibilitychange",visibility);v.removeEventListener("loadedmetadata",metadata);v.removeEventListener("error",fail);v.removeEventListener("playing",playing);v.removeEventListener("pause",paused);hls.current?.destroy();hls.current=null;v.pause();v.removeAttribute("src");v.load();};
+  },[props.media.sessionId]);
+  useEffect(()=>{const v=ref.current;if(v){v.muted=props.muted;v.volume=props.volume;v.playbackRate=props.rate;}},[props.muted,props.volume,props.rate]);
+  useEffect(()=>{if(!props.active||document.hidden){ref.current?.pause();hls.current?.stopLoad();}else if(hls.current)hls.current.startLoad(ref.current?.currentTime||props.position);},[props.active,props.media.sessionId]);
+  const dimensions=()=>{const v=ref.current!;if(Number.isFinite(v.duration))latest.current.onDuration(v.duration);if(v.videoWidth)latest.current.onSize(v.videoWidth,v.videoHeight);};
+  const buffered=(v:HTMLVideoElement)=>{props.onBuffered(v.duration&&v.buffered.length?v.buffered.end(v.buffered.length-1)/v.duration:0);let ahead=0;for(let i=0;i<v.buffered.length;i++)if(v.buffered.start(i)<=v.currentTime+.1&&v.buffered.end(i)>v.currentTime)ahead=v.buffered.end(i)-v.currentTime;props.onBuffer?.(ahead);};
+  return <div className="absolute inset-0 overflow-hidden" onClick={props.onClick}>
+    <video ref={ref} playsInline preload="auto" autoPlay={props.autoPlay && props.active} crossOrigin="anonymous" poster={props.poster} className="w-full h-full"
+      style={{objectFit:props.fit,transform:`translate(${props.panX}px, ${props.panY}px) scale(${props.scale})`,transition:props.isGesturing?"none":"transform .18s ease"}}
+      onLoadedMetadata={dimensions} onLoadedData={dimensions} onTimeUpdate={e=>{props.onTime(e.currentTarget.currentTime);buffered(e.currentTarget);}}
+      onProgress={e=>buffered(e.currentTarget)}
+      onPlay={()=>{if(!ref.current?.paused){wantsPlay.current=true;props.onWaiting();}}}
+      onWaiting={()=>{if(!ref.current?.paused)props.onWaiting();}} onSeeking={()=>{if(!ref.current?.paused)props.onWaiting();}} onSeeked={()=>{const v=ref.current;if(v&&!v.paused&&v.readyState>=3)props.onPlaying();}}
+      onEnded={props.onEnded}>
+      {props.media.playback.subtitles?.filter(t=>t.format==="vtt").map((t,i)=><track key={t.url} kind="subtitles" src={t.url} label={t.label||t.language||`字幕 ${i+1}`} srcLang={t.language} default={t.default}/>)}
+    </video>
+  </div>;
 });
-
-export default VideoSurface;

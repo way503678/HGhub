@@ -1,0 +1,81 @@
+/* Original Feed / PlayerControls styles live in index.css (5f88442).
+   Only plugin panel content and embedding geometry are adapted here. */
+.legacy-home,.legacy-media-page{position:absolute;inset:0}
+.legacy-home{inset:0}
+.legacy-inline-player{position:relative;aspect-ratio:16/9}
+.legacy-panel-heading{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:12px 16px;border-bottom:1px solid var(--p-s3);color:var(--p-on)}
+.legacy-panel-heading nav{display:flex;gap:8px;flex:1}
+.legacy-panel-heading button{font-size:12px;padding:7px 4px;background:none}
+.legacy-panel-heading button[aria-pressed=true]{color:var(--p-primary);font-weight:700}
+.legacy-panel-heading>button{width:28px;height:28px;border-radius:50%;background:var(--p-s3);display:grid;place-items:center}
+.legacy-panel-body{flex:1;min-height:0;overflow:auto;padding:16px;color:var(--p-on);font-size:12px}
+.legacy-panel-body p{line-height:1.7;white-space:pre-wrap}
+.legacy-panel-body h3{font-size:12px;color:var(--p-mut);margin:18px 0 10px}
+.legacy-panel-body button{cursor:pointer;border-radius:4px;padding:7px 10px;background:var(--p-s3);font-size:12px}
+.legacy-panel-body button:disabled{opacity:.4}
+.legacy-panel-body .hpp-episodes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
+.legacy-panel-body .hpp-episodes button{min-height:40px;padding:6px 3px}
+.legacy-panel-body button.selected{background:var(--p-primary);color:var(--p-on-primary)}
+.legacy-panel-body .hpp-playlists{display:flex;flex-wrap:wrap;gap:6px}
+.legacy-panel-body select{max-width:100%;background:var(--p-s3);padding:8px;color:var(--p-on);border-radius:5px}
+.legacy-panel-body .hpp-playback-options,.legacy-panel-body .hpp-playback-options>div{display:flex;flex-direction:column;gap:12px;align-items:stretch}
+.legacy-panel-body .hpp-playback-options label{display:flex;flex-direction:column;gap:5px}
+.legacy-detail-summary{display:flex;gap:14px;margin-bottom:20px}
+.legacy-detail-summary img{width:84px;aspect-ratio:3/4;object-fit:cover;border-radius:6px}
+.legacy-detail-summary h2{font-weight:700;font-size:15px;margin-bottom:10px}
+.legacy-playback-settings{position:absolute;right:22px;top:16px;z-index:20;width:32px;height:32px;display:grid;place-items:center;color:#fff;border-radius:50%;background:#0005}
+.player-root.is-idle .legacy-playback-settings{opacity:0;pointer-events:none}
+.legacy-media-page .player-root{background:#000;overflow:clip}
+.legacy-media-page:has(.desktop-dock-panel.is-open) .desktop-controls{right:394px}
+.legacy-media-page .desktop-controls{transition:right .3s,opacity .2s}
+.legacy-panel-body .hpp-comments{margin:0;padding:0;border:0}
+.legacy-panel-body .hpp-comment{padding:14px 0;border-bottom:1px solid var(--p-s3)}
+.legacy-panel-body .hpp-comment-author{font-size:11px}
+.legacy-panel-body .hpp-comment-compose textarea{width:100%;background:var(--p-s3);border-radius:7px;padding:8px;min-height:70px}
+.legacy-panel-body .hpp-interactions{margin-top:18px}
+.plat-android .legacy-home,.plat-ios .legacy-home{inset:0}
+.plat-android .legacy-playback-settings,.plat-ios .legacy-playback-settings{top:calc(var(--sat,0px) + 49px);right:16px}
+.plat-android .hg-tabbar,.plat-ios .hg-tabbar{flex-shrink:0}
+.plat-android .legacy-panel-body,.plat-ios .legacy-panel-body{padding:12px 16px}
+.legacy-media-page .hpp-notice{position:relative}
+.hpp-page button.legacy-row-card{display:block;padding:0;background:none;border-radius:0;flex:0 0 104px;font:inherit}
+.hpp-page button.legacy-category-heading{padding:0;background:none;justify-content:initial;gap:10px}
+.hpp-category-page .hpp-content,.hpp-library-page .hpp-content{padding:12px 16px 28px}
+.hpp-category-page .hpp-provider-tabs{padding:0 16px;gap:20px}
+.hpp-page .hpp-header{min-height:0;padding:calc(var(--sat,0px) + 14px) 16px 12px}
+.hpp-page .hpp-header h1{font-size:24px;letter-spacing:0}
+.hpp-preview-strip:has(.legacy-row-card){scrollbar-width:none}
+.legacy-search-page .legacy-search-form{border:0;border-radius:var(--r-ctl);gap:8px;padding:0 14px;background:var(--p-s3)}
+.legacy-search-page .legacy-search-form:focus-within{background:var(--p-s4)}
+.legacy-search-form input{padding:0;height:100%;box-shadow:none}
+.legacy-search-page button{cursor:pointer}
+.legacy-search-page button:focus-visible{outline:2px solid var(--p-primary);outline-offset:2px}
+.legacy-search-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+.legacy-search-grid .legacy-search-poster{border:0;min-width:0;border-radius:var(--r-sm)}
+.legacy-search-options{background:var(--p-s2);border-radius:var(--r-md);padding:14px;margin-bottom:12px;color:var(--p-on)}
+.legacy-search-options .hpp-scope{margin:0 0 12px;flex-wrap:wrap}
+.legacy-search-options select{background:var(--p-s3);padding:6px;border-radius:var(--r-ctl);max-width:100%}
+.legacy-search-tabs button{white-space:nowrap;padding:6px 10px;font-size:11px;border-radius:var(--r-ctl);color:var(--p-mut)}
+.legacy-search-tabs button.selected{background:var(--p-pc);color:var(--p-primary)}
+.legacy-search-page .hpp-more{padding:16px 0;font-size:12px}
+@media(min-width:768px){.legacy-search-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(min-width:1280px){.legacy-search-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+
+/* Plugin management: keep identity, status and actions readable on narrow screens. */
+.hpp-plugin-heading>div{min-width:0;overflow-wrap:anywhere}
+.hpp-plugin-heading p,.hpp-plugin-footer>span{color:var(--p-mut);opacity:1}
+.hpp-plugin-footer>div{flex-wrap:wrap}
+.hpp-forms .hpp-account,.hpp-forms .hpp-actions{margin:0;padding:16px;border:1px solid var(--surface-border);border-radius:10px}
+.hpp-action-list{display:grid;gap:4px}
+.hpp-page .hpp-action-list button{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;text-align:left}
+.hpp-action-list small{display:block;color:var(--p-mut);font-weight:normal;margin-top:3px}
+
+/* Native inputs retain their keyboard behaviour inside the shared filter chips. */
+.browse-filters:empty{display:none}
+.browse-filters fieldset{min-width:0;gap:6px}
+.browse-filters legend{float:none;margin-bottom:6px;font-size:13px;font-weight:600;opacity:1}
+.browse-filters label,.browse-filters button{position:relative;padding:7px 12px;min-height:34px;border-radius:var(--r-ctl);background:var(--p-s2);cursor:pointer;font-size:13px}
+.browse-filters label input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.browse-filters label:has(:checked),.browse-filters button[aria-pressed=true]{background:var(--p-tint);color:var(--p-primary);box-shadow:inset 0 0 0 1px currentColor}
+.browse-filters label:has(:focus-visible){outline:2px solid var(--p-primary);outline-offset:2px}
+.legacy-search-grid{align-items:start;gap:12px 10px;grid-template-columns:repeat(auto-fill,minmax(min(140px,100%),1fr))}

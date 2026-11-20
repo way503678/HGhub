@@ -18,8 +18,8 @@ jobs:
       - name: Checkout HGhub v1.2.1
         uses: actions/checkout@v4
         with:
-          repository: Minireel/HGhub
-          ref: v1.2.1
+          repository: way503678/HGhub
+          ref: 5f88442961ad9cdac50af4421cf76b3ac06d64e2
           persist-credentials: false
 
       - name: Install Linux dependencies

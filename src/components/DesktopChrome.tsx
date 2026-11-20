@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useStore, type Tab } from "../store";
-import { APP_VERSION } from "../api";
-import { Avatar } from "./ui";
+import { APP_VERSION } from "../environment";
 import {
-  IClose, IGrid, IGridF, IHome, IHomeF, IMinus, IMoon, IRestore, ISearch, ISettings, ISidebar,
-  ISquare, ISun, ITrophy, IUser, IUserF, Logo,
+  IPin, IClose, IGrid, IGridF, IHome, IHomeF, IMinus, IMoon, IRestore, ISearch, ISettings, ISidebar, ICpu,
+  ISquare, ISun, IUser, IUserF, Logo,
 } from "../icons";
 
 const appWindow = () => getCurrentWindow();
+
+export function PlaybackWindowActions() {
+  const { platform } = useStore();
+  const [pinned, setPinned] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState("");
+  useEffect(() => { let live = true; void appWindow().isAlwaysOnTop().then(v => { if(live) setPinned(v); }).catch(()=>{}); return()=>{live=false;}; }, []);
+  const togglePin = async () => { setPending(true); setError(""); try { await appWindow().setAlwaysOnTop(!pinned); setPinned(!pinned); } catch { setError("窗口置顶设置失败，请重试"); } finally { setPending(false); } };
+  return <div className="win-caption-buttons hg-watch-window-actions">
+    {error&&<span role="status" className="hg-window-error">{error}</span>}
+    <button aria-label={pinned?"取消窗口置顶":"窗口置顶"} aria-pressed={pinned} disabled={pending} onClick={()=>void togglePin()}><IPin size={17}/></button>
+    {platform !== "macos" && <>
+    <button aria-label="最小化" onClick={() => appWindow().minimize().catch(() => {})}><IMinus size={16}/></button>
+    <button aria-label="最大化或还原" onClick={() => appWindow().toggleMaximize().catch(() => {})}><ISquare size={14}/></button>
+    <button className="win-close" aria-label="关闭窗口" onClick={() => appWindow().close().catch(() => {})}><IClose size={17}/></button></>}
+  </div>;
+}
 
 export function DesktopTitleBar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const { theme, setTheme, setTab, platform } = useStore();
@@ -60,16 +74,14 @@ export function DesktopTitleBar({ collapsed, onToggle }: { collapsed: boolean; o
 }
 
 export function DesktopRail({ collapsed }: { collapsed: boolean }) {
-  const { tab, setTab, user, setLoginOpen, push, platform, stack } = useStore();
+  const { tab, setTab, push, platform, stack } = useStore();
   /* 从侧栏进入的栈页（排行榜 / 设置）接管高亮，否则「我的」会一直亮着，看起来不像独立页面 */
   const top = stack[stack.length - 1];
-  const railPage: "ranks" | "settings" | null =
-    top?.kind === "settings" ? "settings" : top?.kind === "ranks" ? "ranks" : null;
+  const railPage = top?.kind === "settings" ? "settings" : top?.kind === "plugins" ? "plugins" : null;
   const onTab = (key: Tab | "search") => !railPage && tab === key;
   const items: { key: Tab; label: string; Icon: typeof IHome; Filled: typeof IHomeF }[] = [
     { key: "home", label: "首页", Icon: IHome, Filled: IHomeF },
     { key: "category", label: "分类", Icon: IGrid, Filled: IGridF },
-    { key: "profile", label: "我的", Icon: IUser, Filled: IUserF },
   ];
   return (
     <nav className={`win-sidebar ${collapsed ? "is-compact" : ""}`} aria-label="主导航">
@@ -89,11 +101,11 @@ export function DesktopRail({ collapsed }: { collapsed: boolean }) {
               <span className="win-nav-copy">{label}</span>
             </button>
           ))}
-          <button className={`win-nav-item ${railPage === "ranks" ? "is-selected" : ""}`}
-            aria-current={railPage === "ranks" ? "page" : undefined}
-            onClick={() => { if (railPage !== "ranks") push({ kind: "ranks" }); }}>
-            <span className="win-nav-symbol"><ITrophy size={21} strokeWidth={1.7} /></span>
-            <span className="win-nav-copy">排行榜</span>
+          <button className={`win-nav-item ${railPage === "plugins" ? "is-selected" : ""}`}
+            aria-current={railPage === "plugins" ? "page" : undefined}
+            onClick={() => { if (railPage !== "plugins") push({ kind: "plugins" }); }}>
+            <span className="win-nav-symbol"><ICpu size={21} strokeWidth={1.7} /></span>
+            <span className="win-nav-copy">插件中心</span>
           </button>
           <button className={`win-nav-item ${railPage === "settings" ? "is-selected" : ""}`}
             aria-current={railPage === "settings" ? "page" : undefined}
@@ -103,11 +115,11 @@ export function DesktopRail({ collapsed }: { collapsed: boolean }) {
           </button>
         </div>
         <div className="win-sidebar-bottom">
-          <button className="win-account" onClick={() => { setTab("profile"); if (!user) setLoginOpen(true); }}>
-            <Avatar size={34} hue={220} name={user?.nickname} icon={user ? undefined : <IUser size={17} />} />
+          <button aria-label="我的" className={`win-account ${onTab("profile") ? "is-selected" : ""}`} aria-current={onTab("profile") ? "page" : undefined} onClick={() => setTab("profile")}>
+            <IUser size={25}/>
             <span className="win-account-copy">
-              <strong>{user?.nickname || "登录 HGhub"}</strong>
-              <small>{user ? "你的精彩，都在这里" : "留住每一次心动"}</small>
+              <strong>我的片库</strong>
+              <small>收藏与观看进度</small>
             </span>
           </button>
           <span className="win-sidebar-version">HGhub for {platform === "macos" ? "macOS" : platform === "linux" ? "Linux" : "Windows"} {APP_VERSION}</span>

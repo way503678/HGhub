@@ -1,0 +1,41 @@
+import {selectCategorySource,playerPanel} from './frontend-navigation.mjs';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+
+export async function testPluginFeed({page,dispatch,root,base,output,report,rail}){
+ const code=(await readFile(join(root,'src-tauri/crates/hpp/tests/fixtures/feed.js'),'utf8')).replaceAll('__FIXTURE_BASE__',base);
+ assert((await dispatch({action:'import',params:{code}})).ok);
+ const inspect=async()=>{const r=await dispatch({action:'call',params:{id:'fixture.feed',method:'ui.submit',args:{actionId:'inspect',values:{}},requestId:crypto.randomUUID()}});assert(r.ok);return JSON.parse(r.value.message);};
+ const progress=async(mediaId,episodeId,playlistId)=>{const r=await dispatch({action:'library.progress.get',params:{pluginId:'fixture.feed',mediaId,episodeId,...(playlistId?{playlistId}:{})}});assert(r.ok);return r.value;};
+ await page.evaluate(()=>{const p=JSON.parse(localStorage.getItem('hpp.preferences')||'{}');localStorage.setItem('hpp.preferences',JSON.stringify({...p,autoNext:false}));});
+ await page.reload();await selectCategorySource(page,'虚构信息流');await page.getByRole('button',{name:'信息流 · 虚构信息流',exact:true}).click();
+ const playing=()=>page.waitForFunction(()=>document.querySelector('video')?.currentTime>0.5);
+ const next=()=>page.getByRole('button',{name:'下一个',exact:true});
+ const previous=()=>page.getByRole('button',{name:'上一个',exact:true});
+ await playing();assert.equal((await inspect())['last.media.getDetail'],undefined);
+ assert.equal((await inspect())['last.media.resolvePlayback'].playlistId,undefined);
+ await page.getByRole('button',{name:'本地收藏',exact:true}).click();await page.getByRole('button',{name:'取消本地收藏',exact:true}).waitFor();
+ const saved=page.waitForResponse(r=>r.url().endsWith('/__hpp_test_ipc')&&r.request().postDataJSON().action==='library.progress.set'&&r.request().postDataJSON().params.positionSec>=2);
+ await page.evaluate(()=>{const v=document.querySelector('video');v.currentTime=2;v.dispatchEvent(new Event('timeupdate'));v.pause();});await saved;
+ assert((await progress('feed:direct','entry:real')).positionSec>=2);
+ await next().click();await page.getByRole('alert').filter({hasText:'虚构分页失败'}).waitFor();assert(await page.locator('video').count());
+ const fallbackReady=page.waitForResponse(r=>r.url().endsWith('/__hpp_test_ipc')&&r.request().postDataJSON().action==='media.prepare'&&r.request().postDataJSON().params.args.episodeId==='episode:real');
+ await page.getByRole('button',{name:'重试信息流',exact:true}).click();await fallbackReady;await playing();
+ const fallback=await inspect();assert.equal(fallback['last.media.listEpisodes'].cursor,'episodes:cursor');assert.equal(fallback['last.media.resolvePlayback'].episodeId,'episode:real');assert.equal(fallback['last.media.resolvePlayback'].playlistId,'playlist:real');
+ await next().click();await page.waitForFunction(()=>document.querySelector('button[aria-label="下一个"]')?.disabled);
+ await previous().click();await page.waitForFunction(()=>document.querySelector('video')?.currentTime>=2);
+ await playerPanel(page,'播放设置');await page.getByRole('button',{name:'刷新播放',exact:true}).click();await page.waitForFunction(()=>document.querySelector('video')?.currentTime>=2);
+ const events=(await inspect()).reports.filter(r=>r.mediaId==='feed:direct');assert.equal(events.filter(r=>r.event==='start').length,2);
+ await page.evaluate(()=>{const v=document.querySelector('video');v.pause();v.dispatchEvent(new Event('ended'));});
+ assert.equal((await inspect())['last.media.resolvePlayback'].episodeId,'entry:real');
+ await page.screenshot({path:join(output,'feed-player.png')});
+ await rail.getByRole('button',{name:'分类',exact:true}).click();assert.equal(await page.locator('video').count(),0);
+ await page.evaluate(()=>{const p=JSON.parse(localStorage.getItem('hpp.preferences'));localStorage.setItem('hpp.preferences',JSON.stringify({...p,autoNext:true}));});
+ await page.reload();await selectCategorySource(page,'虚构信息流');await page.getByRole('button',{name:'信息流 · 虚构信息流',exact:true}).click();await playing();
+ const advanced=page.waitForResponse(r=>r.url().endsWith('/__hpp_test_ipc')&&r.request().postDataJSON().action==='media.prepare'&&r.request().postDataJSON().params.args.episodeId==='episode:real');
+ await page.evaluate(()=>document.querySelector('video').dispatchEvent(new Event('ended')));await advanced;await playing();
+ await playerPanel(page,'选集');await page.getByRole('button',{name:'真实入口',exact:true}).waitFor();assert.equal(await page.locator('video').count(),1);
+ await rail.getByRole('button',{name:'首页',exact:true}).click();assert.equal(await page.locator('video').count(),0);
+ report.passed.push('Classic feed preserves direct entry without detail or invented playlist ID; failed pagination keeps playback and retries original cursor; duplicate cursors stop; favorite/resume/refresh reporting and auto-next work; episode drawer shares one player and leaving releases it');
+}
